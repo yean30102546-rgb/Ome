@@ -100,6 +100,12 @@ function handleInsert(payload) {
       const itemId = `${caseId}-${(index + 1).toString().padStart(3, '0')}`;
       itemIds.push(itemId);
 
+      // Upload images to Google Drive if provided
+      let imageUrls = [];
+      if (item.images && Array.isArray(item.images)) {
+        imageUrls = item.images.map(base64Data => uploadImageToDrive(base64Data, itemId, caseId)).filter(url => url !== '');
+      }
+
       rowsToInsert.push([
         itemId,
         caseId,
@@ -110,10 +116,12 @@ function handleInsert(payload) {
         item.itemCode || '',
         item.amount || 0,
         item.reason || '',
+        item.reasonSubtype || '', // Reason subtype (e.g., "รั่วซึม")
         item.responsible || '',
+        item.responsibleSubtype || '', // Responsible subtype (e.g., "PDF")
         item.details || '',
         'Pending', // Initial status
-        '', // Image URLs (can be populated if file upload is implemented)
+        imageUrls.join('|'), // Image URLs separated by |
       ]);
     });
 
@@ -162,7 +170,7 @@ function handleReadAll(payload) {
     // Skip header row and convert to objects
     const caseMap = new Map(); // Group items by case ID
 
-    // Assuming columns: Item ID | Case ID | Date | Source | ItemNumber | ItemName | ItemCode | Amount | Reason | Responsible | Details | Status | Images
+    // Assuming columns: Item ID | Case ID | Date | Source | ItemNumber | ItemName | ItemCode | Amount | Reason | Reason Subtype | Responsible | Responsible Subtype | Details | Status | Images
     for (let i = 1; i < data.length; i++) {
       const row = data[i];
       const caseId = row[1];
@@ -175,10 +183,12 @@ function handleReadAll(payload) {
         itemCode: row[6] || '',
         amount: row[7] || 0,
         reason: row[8] || '',
-        responsible: row[9] || '',
-        details: row[10] || '',
-        status: row[11] || 'Pending',
-        imageUrls: (row[12] || '').split('|').filter(url => url.trim() !== ''),
+        reasonSubtype: row[9] || '',
+        responsible: row[10] || '',
+        responsibleSubtype: row[11] || '',
+        details: row[12] || '',
+        status: row[13] || 'Pending',
+        imageUrls: (row[14] || '').split('|').filter(url => url.trim() !== ''),
       };
 
       if (!caseMap.has(caseId)) {
@@ -227,13 +237,13 @@ function handleUpdate(payload) {
       if (data[i][1] === caseId) { // Column B is Case ID
         // Update status if provided
         if (payload.updates.status) {
-          sheet.getRange(i + 1, 12).setValue(payload.updates.status); // Column L is Status
+          sheet.getRange(i + 1, 14).setValue(payload.updates.status); // Column N is Status (0-indexed: 13)
           updatedCount++;
         }
 
         // Update details if provided
         if (payload.updates.items && payload.updates.items[0]) {
-          const detailsIndex = 11; // Column K is Details
+          const detailsIndex = 13; // Column M is Details (0-indexed: 12)
           sheet.getRange(i + 1, detailsIndex).setValue(payload.updates.items[0].details || '');
         }
       }
@@ -277,7 +287,7 @@ function handleDashboardStats(payload) {
 
     for (let i = 1; i < data.length; i++) {
       const caseId = data[i][1];
-      const status = data[i][11]; // Status column
+      const status = data[i][13]; // Status column (0-indexed: 13)
       const reason = data[i][8]; // Reason column
       const source = data[i][3]; // Source column
 
@@ -378,7 +388,7 @@ function createBackup(sourceSheet) {
 function initializeSheet() {
   try {
     const sheet = SpreadsheetApp.openById(SHEET_ID).getSheetByName(SHEET_NAME);
-    const firstRow = sheet.getRange(1, 1, 1, 13).getValues()[0];
+    const firstRow = sheet.getRange(1, 1, 1, 15).getValues()[0];
     
     // Check if headers exist
     if (!firstRow[0] || firstRow[0] === '') {
@@ -392,7 +402,9 @@ function initializeSheet() {
         'Item Code',
         'Amount (Box)',
         'Reason',
+        'Reason Subtype',
         'Responsible',
+        'Responsible Subtype',
         'Details',
         'Status',
         'Image URLs'
@@ -427,8 +439,10 @@ function testDoPost() {
         itemName: 'Test Product',
         itemCode: 'TP-01',
         amount: 10,
-        reason: 'รั่ว/ซึม',
+        reason: 'รั่ว',
+        reasonSubtype: 'รั่วซึม',
         responsible: 'SFC',
+        responsibleSubtype: 'PDF',
         details: 'Test details'
       }
     ]
@@ -496,18 +510,47 @@ function getItemMaster() {
 }
 
 /**
+ * Create or get a case folder in Google Drive
+ * @param {string} caseId - Case ID for folder naming
+ * @returns {string} - Folder ID
+ */
+function getOrCreateCaseFolder(caseId) {
+  try {
+    const parentFolder = DriveApp.getFolderById(DRIVE_FOLDER_ID);
+    const caseFolderName = `Case_${caseId}`;
+    
+    // Search for existing folder
+    const folders = parentFolder.getFoldersByName(caseFolderName);
+    
+    if (folders.hasNext()) {
+      return folders.next().getId();
+    }
+    
+    // Create new folder if not exists
+    const newFolder = parentFolder.createFolder(caseFolderName);
+    return newFolder.getId();
+  } catch (error) {
+    Logger.log('Folder creation error: ' + error);
+    return DRIVE_FOLDER_ID; // Fallback to parent folder
+  }
+}
+
+/**
  * Upload image to Google Drive and return file URL
+ * Creates a case-specific folder and uploads image there
  * @param {string} base64Data - Base64 encoded image
  * @param {string} itemId - Item ID for naming
+ * @param {string} caseId - Case ID for folder organization
  * @returns {string} - File URL
  */
-function uploadImageToDrive(base64Data, itemId) {
+function uploadImageToDrive(base64Data, itemId, caseId) {
   try {
     // Decode base64
     const data = Utilities.newBlob(Utilities.base64Decode(base64Data.split(',')[1]), 'image/jpeg');
     
-    // Get folder
-    const folder = DriveApp.getFolderById(DRIVE_FOLDER_ID);
+    // Get or create case folder
+    const caseFolderId = getOrCreateCaseFolder(caseId);
+    const folder = DriveApp.getFolderById(caseFolderId);
     
     // Create file with timestamp
     const filename = `${itemId}_${new Date().getTime()}.jpg`;

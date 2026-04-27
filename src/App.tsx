@@ -34,6 +34,7 @@ import {
   insertCase,
   updateCase,
   setGasWebAppUrl,
+  fetchItemMaster,
   ReworkCase,
   ReworkItem,
 } from './services/api';
@@ -63,7 +64,9 @@ interface ReworkItem {
   itemCode: string;
   amount: number;
   reason: string;
+  reasonSubtype?: string; // e.g. "รั่วซึม", "รั่วซีลฟอยล์"
   responsible: string;
+  responsibleSubtype?: string; // e.g. "PDF", "WFG"
   details?: string;
   imageUrls?: string[];
   status?: 'Pending' | 'In-Progress' | 'Completed';
@@ -81,6 +84,153 @@ interface ReworkCase {
  * ===== MAIN APP COMPONENT =====
  */
 export default function App() {
+  // ===== REASON HIERARCHY & RESPONSIBLE MAPPING =====
+  const REASON_MAIN_OPTIONS = [
+    'รั่ว',
+    'แตกตะเข็บ',
+    'รอยมีด',
+    'ขวดเปื้อน',
+    'กล่องเปื้อนอย่างเดียว',
+    'อื่นๆ',
+  ];
+
+  const LEAK_SUBTYPES = ['รั่วซึม', 'รั่วซีลฟอยล์', 'รั่วตามด'];
+
+  const REASON_DEFAULT_RESPONSIBLE: Record<string, 'SFC' | 'Supplier' | ''> = {
+    'รั่วซึม': 'SFC',
+    'รั่วตามด': 'Supplier',
+    'แตกตะเข็บ': 'Supplier',
+    'รอยมีด': 'Supplier',
+    'ขวดเปื้อน': 'SFC',
+  };
+
+  const RESPONSIBLE_MAIN_OPTIONS = ['SFC', 'Supplier', 'อื่นๆ'];
+
+  const RESPONSIBLE_SUBDIVISIONS: Record<string, string[]> = {
+    SFC: ['PDF', 'WFG', 'WPK', 'Customer', 'อื่นๆ'],
+    Supplier: ['SP', 'PJW', 'Polymer', 'ธนกร', 'Fuchs', 'อื่นๆ'],
+  };
+
+  const [selectionModal, setSelectionModal] = useState<{
+    itemId: string;
+    type: 'reason' | 'responsible';
+    title: string;
+    options: string[];
+  } | null>(null);
+  const [autoFillTriggeredItem, setAutoFillTriggeredItem] = useState<string | null>(null);
+
+  const getResponsibleDropdownOptions = (item: ReworkItem) => {
+    const base = [...RESPONSIBLE_MAIN_OPTIONS];
+    if (item.responsible && !base.includes(item.responsible)) {
+      base.push(item.responsible);
+    }
+    return base;
+  };
+
+  const openSelectionModal = (
+    itemId: string,
+    type: 'reason' | 'responsible',
+    title: string,
+    options: string[]
+  ) => {
+    setSelectionModal({ itemId, type, title, options });
+  };
+
+  const handleSelectionModalChoose = (value: string) => {
+    if (!selectionModal) return;
+
+    setFormItems(prev =>
+      prev.map(item => {
+        if (item.id !== selectionModal.itemId) return item;
+
+        if (selectionModal.type === 'reason') {
+          // User selected a reason subtype (e.g., รั่วซึม)
+          const suggestedResponsible = REASON_DEFAULT_RESPONSIBLE[value] || '';
+          return {
+            ...item,
+            reason: 'รั่ว', // Keep main reason as "รั่ว"
+            reasonSubtype: value, // Store subtype
+            responsible: suggestedResponsible || item.responsible,
+            responsibleSubtype: '', // Reset subtype when reason changes
+          };
+        }
+
+        // User selected a responsible subtype (e.g., PDF)
+        return {
+          ...item,
+          responsibleSubtype: value,
+        };
+      })
+    );
+    setSelectionModal(null);
+  };
+
+  const getReasonDropdownOptions = (item: ReworkItem) => {
+    const options = [...REASON_MAIN_OPTIONS];
+    if (item.reason && !options.includes(item.reason)) {
+      options.push(item.reason);
+    }
+    return options;
+  };
+
+  const updateReasonAndResponsible = (id: string, reason: string) => {
+    if (reason === 'รั่ว') {
+      // Immediately open modal for leak subtypes
+      setSelectionModal({
+        itemId: id,
+        type: 'reason',
+        title: 'เลือกรูปแบบการรั่ว',
+        options: LEAK_SUBTYPES,
+      });
+      return;
+    }
+
+    const suggestedResponsible = REASON_DEFAULT_RESPONSIBLE[reason] || '';
+    setFormItems(prev =>
+      prev.map(item =>
+        item.id === id
+          ? {
+              ...item,
+              reason,
+              reasonSubtype: '', // Clear subtype for non-leak reasons
+              responsible: suggestedResponsible || item.responsible,
+              responsibleSubtype: '', // Reset responsible subtype
+            }
+          : item
+      )
+    );
+  };
+
+  const updateResponsibleSelection = (id: string, responsible: string) => {
+    if (responsible === 'SFC' || responsible === 'Supplier') {
+      openSelectionModal(
+        id,
+        'responsible',
+        `เลือกระดับผู้รับผิดชอบ (${responsible})`,
+        RESPONSIBLE_SUBDIVISIONS[responsible]
+      );
+      return;
+    }
+
+    setFormItems(prev =>
+      prev.map(item =>
+        item.id === id ? { ...item, responsible } : item
+      )
+    );
+  };
+
+  /**
+   * Calculate deadline status for a case
+   */
+  const getDeadlineStatus = (caseDate: string, status: string) => {
+    if (status === 'Completed') return null;
+
+    const daysSince = Math.floor((Date.now() - new Date(caseDate).getTime()) / (1000 * 60 * 60 * 24));
+
+    if (daysSince > 30) return 'danger'; // Over 30 days
+    if (daysSince > 7) return 'warning'; // Over 7 days
+    return null;
+  };
   // ===== TAB STATE =====
   const [activeTab, setActiveTab] = useState<Tab>('overall');
   const [searchQuery, setSearchQuery] = useState('');
@@ -88,6 +238,10 @@ export default function App() {
   const [cases, setCases] = useState<ReworkCase[]>([]);
   const [isLoadingCases, setIsLoadingCases] = useState(true);
   const [caseError, setCaseError] = useState<string | null>(null);
+
+  // ===== MASTER DATA STATE =====
+  const [itemMaster, setItemMaster] = useState<Map<string, string>>(new Map());
+  const [isLoadingMaster, setIsLoadingMaster] = useState(true);
 
   // ===== FORM STATE =====
   const [caseSource, setCaseSource] = useState('SFC');
@@ -98,8 +252,10 @@ export default function App() {
       itemName: '',
       itemCode: '',
       amount: 1,
-      reason: 'รั่ว/ซึม',
+      reason: '',
+      reasonSubtype: '',
       responsible: 'SFC',
+      responsibleSubtype: '',
       details: '',
       imageUrls: [],
     },
@@ -120,15 +276,36 @@ export default function App() {
   // ===== IMAGE UPLOAD STATE =====
   const [uploadedImages, setUploadedImages] = useState<Record<string, File[]>>({});
 
-  const GAS_WEB_APP_URL = 'https://script.google.com/macros/s/AKfycbyBNgmLedxat0owxYbstnrTB084gIxwFgSgYgn6T3RdFTgBDLF7q3JLk1oXQ2OmL5ri/exec';
+  const GAS_WEB_APP_URL = 'https://script.google.com/macros/s/AKfycbzFFZnbPxVL62oy9FKX2bPVfOkl5f2vnif4gGoLB6p31e34po3qEFH1WMBqPrU86BwT/exec';
 
   /**
-   * Load all cases on component mount
+   * Load all cases and master data on component mount
    */
   useEffect(() => {
     setGasWebAppUrl(GAS_WEB_APP_URL);
+    loadMasterData();
     loadCases();
   }, []);
+
+  /**
+   * Fetch item master data from GAS
+   */
+  const loadMasterData = async () => {
+    try {
+      setIsLoadingMaster(true);
+      const result = await fetchItemMaster();
+      if (result.success && result.data) {
+        const masterMap = new Map(result.data.map(item => [item.itemNumber, item.itemName]));
+        setItemMaster(masterMap);
+      } else {
+        console.warn('Failed to load master data:', result.error);
+      }
+    } catch (error) {
+      console.error('Error loading master data:', error);
+    } finally {
+      setIsLoadingMaster(false);
+    }
+  };
 
   /**
    * Fetch cases from Google Sheets via GAS
@@ -169,8 +346,10 @@ export default function App() {
         itemName: '',
         itemCode: '',
         amount: 1,
-        reason: 'รั่ว/ซึม',
+        reason: '',
+        reasonSubtype: '',
         responsible: 'SFC',
+        responsibleSubtype: '',
         details: '',
         imageUrls: [],
       },
@@ -198,13 +377,35 @@ export default function App() {
     field: keyof ReworkItem,
     value: string | number
   ) => {
+    if (field === 'itemNumber') {
+      const typed = String(value);
+      const itemName = itemMaster.get(typed.trim());
+      setFormItems(prev =>
+        prev.map(item =>
+          item.id === id
+            ? {
+                ...item,
+                itemNumber: typed,
+                itemName: itemName ? itemName : item.itemName,
+              }
+            : item
+        )
+      );
+
+      if (itemName) {
+        setAutoFillTriggeredItem(id);
+        window.setTimeout(() => setAutoFillTriggeredItem(prev => (prev === id ? null : prev)), 900);
+      }
+      return;
+    }
+
     setFormItems(
       formItems.map((item) =>
         item.id === id
           ? {
               ...item,
               [field]:
-                field === 'itemNumber' || field === 'itemCode'
+                field === 'itemCode'
                   ? enforceNumeric(String(value))
                   : field === 'amount'
                     ? Math.max(0, parseInt(String(value)) || 0)
@@ -260,8 +461,10 @@ export default function App() {
             itemName: '',
             itemCode: '',
             amount: 1,
-            reason: 'รั่ว/ซึม',
+            reason: '',
+            reasonSubtype: '',
             responsible: 'SFC',
+            responsibleSubtype: '',
             details: '',
             imageUrls: [],
           },
@@ -374,7 +577,7 @@ export default function App() {
           <SidebarItem
             active={activeTab === 'dashboard'}
             onClick={() => setActiveTab('dashboard')}
-            label="Dashboard"
+            label="แดชบอร์ด (Dashboard)"
             icon={<BarChart3 size={16} />}
           />
         </div>
@@ -411,7 +614,7 @@ export default function App() {
                     })}
                   </p>
                   <h1 className="text-3xl font-medium tracking-tight text-foreground">
-                    Morning Admin.
+                    สวัสดีตอนเช้า Admin
                   </h1>
                 </div>
                 <div className="flex gap-2">
@@ -434,14 +637,14 @@ export default function App() {
 
               {/* Stats Cards */}
               <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
-                <StatCard label="Total Cases" value={stats.total.toString()} />
+                <StatCard label="จำนวนงานทั้งหมด (Total)" value={stats.total.toString()} />
                 <StatCard
-                  label="Pending"
+                  label="รอดำเนินการ (Pending)"
                   value={stats.pending.toString()}
                   trend={`${Math.round((stats.pending / (stats.total || 1)) * 100)}%`}
                 />
-                <StatCard label="In-Progress" value={stats.inProgress.toString()} />
-                <StatCard label="Completed" value={stats.completed.toString()} />
+                <StatCard label="กำลังดำเนินการ (In-Progress)" value={stats.inProgress.toString()} />
+                <StatCard label="เสร็จสิ้น (Completed)" value={stats.completed.toString()} />
               </div>
 
               {/* Cases List */}
@@ -455,7 +658,7 @@ export default function App() {
                       <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-muted" size={14} />
                       <input
                         type="text"
-                        placeholder="Search Case..."
+                        placeholder="ค้นหางาน..."
                         className="pl-9 pr-4 py-1.5 bg-white border border-border rounded-lg text-[10px] focus:outline-none focus:ring-1 focus:ring-accent font-bold uppercase"
                         value={searchQuery}
                         onChange={(e) => setSearchQuery(e.target.value)}
@@ -497,34 +700,54 @@ export default function App() {
                 ) : (
                   <div className="glass-card p-2 bg-white">
                     <div className="divide-y divide-[#f1f1f1]">
-                      {filteredCases.map((item) => (
-                        <motion.div
-                          key={item.id}
-                          layout
-                          onClick={() => openUpdateModal(item)}
-                          className="flex items-center py-4 px-4 hover:bg-slate-50/50 transition-colors group rounded-lg cursor-pointer"
-                        >
-                          <div className="flex-1">
-                            <div className="text-sm font-medium text-foreground">
-                              {item.items[0]?.itemName || 'N/A'}
+                      {filteredCases.map((item) => {
+                        const deadlineStatus = getDeadlineStatus(item.date, item.status);
+                        return (
+                          <motion.div
+                            key={item.id}
+                            layout
+                            onClick={() => openUpdateModal(item)}
+                            className={`flex items-center py-4 px-4 hover:bg-slate-50/50 transition-colors group rounded-lg cursor-pointer ${
+                              deadlineStatus === 'warning' ? 'bg-orange-50 border-l-4 border-orange-400' :
+                              deadlineStatus === 'danger' ? 'bg-red-50 border-l-4 border-red-400' : ''
+                            }`}
+                          >
+                            <div className="flex-1">
+                              <div className="flex items-center gap-2">
+                                <div className="text-sm font-medium text-foreground">
+                                  {item.items[0]?.itemName || 'N/A'}
+                                </div>
+                                {deadlineStatus === 'warning' && (
+                                  <div className="flex items-center gap-1 text-orange-600 text-xs">
+                                    <Clock size={12} />
+                                    <span>7 วัน</span>
+                                  </div>
+                                )}
+                                {deadlineStatus === 'danger' && (
+                                  <div className="flex items-center gap-1 text-red-600 text-xs">
+                                    <AlertCircle size={12} />
+                                    <span>เกิน 30 วัน</span>
+                                  </div>
+                                )}
+                              </div>
+                              <div className="text-[12px] text-muted mt-1">
+                                {formatTimestamp(item.date)} &bull; Source:{' '}
+                                <span className="font-bold">{item.source}</span> &bull;{' '}
+                                <span className="font-mono text-accent">{item.id}</span>
+                              </div>
                             </div>
-                            <div className="text-[12px] text-muted mt-1">
-                              {formatTimestamp(item.date)} &bull; Source:{' '}
-                              <span className="font-bold">{item.source}</span> &bull;{' '}
-                              <span className="font-mono text-accent">{item.id}</span>
+                            <div className="mr-8 text-right">
+                              <p className="text-xs font-bold text-foreground">
+                                {item.items[0]?.amount || 0} Box
+                              </p>
+                              <p className="text-[10px] text-muted uppercase tracking-wider font-semibold">
+                                {item.items[0]?.reason || 'N/A'}
+                              </p>
                             </div>
-                          </div>
-                          <div className="mr-8 text-right">
-                            <p className="text-xs font-bold text-foreground">
-                              {item.items[0]?.amount || 0} Box
-                            </p>
-                            <p className="text-[10px] text-muted uppercase tracking-wider font-semibold">
-                              {item.items[0]?.reason || 'N/A'}
-                            </p>
-                          </div>
-                          <StatusPill status={item.status} />
-                        </motion.div>
-                      ))}
+                            <StatusPill status={item.status} />
+                          </motion.div>
+                        );
+                      })}
                     </div>
                   </div>
                 )}
@@ -546,7 +769,7 @@ export default function App() {
                   <p className="text-muted text-sm mt-1">เพิ่มข้อมูลล็อตสินค้าที่พบคราบหรือความเสียหาย</p>
                 </div>
                 <div className="flex items-center gap-2 text-[10px] font-bold text-muted uppercase tracking-widest bg-slate-100 px-3 py-1 rounded-full">
-                  <Clock size={12} /> Live Entry Mode
+                  <Clock size={12} /> บันทึกข้อมูลสด
                 </div>
               </div>
 
@@ -612,21 +835,38 @@ export default function App() {
 
                       <div className="grid grid-cols-1 md:grid-cols-4 gap-6 mb-8">
                         <InputField
-                        label="Item Number *"
+                        label="หมายเลขรายการ (Item Number) *"
                         value={item.itemNumber}
                         onChange={(v) => updateFormItem(item.id, 'itemNumber', v)}
                         placeholder="e.g. M-101"
                         disabled={isSaving}
                       />
+                      <div className="space-y-2">
+                        <label className="text-[10px] font-bold text-muted uppercase tracking-[0.1em] ml-1">
+                          ชื่อรายการ (Item Name) *
+                        </label>
+                        <input
+                          value={item.itemName}
+                          onChange={(e) => updateFormItem(item.id, 'itemName', e.target.value)}
+                          placeholder="ชื่อสินค้า"
+                          disabled={isSaving}
+                          className="w-full px-4 py-3 bg-slate-50 border border-border rounded-xl focus:outline-none focus:border-accent transition-all text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed"
+                        />
+                        <AnimatePresence>
+                          {autoFillTriggeredItem === item.id && (
+                            <motion.p
+                              initial={{ opacity: 0, y: -6 }}
+                              animate={{ opacity: 1, y: 0 }}
+                              exit={{ opacity: 0, y: -6 }}
+                              className="text-xs text-emerald-600 font-medium"
+                            >
+                              ชื่อรายการถูกเติมอัตโนมัติ
+                            </motion.p>
+                          )}
+                        </AnimatePresence>
+                      </div>
                       <InputField
-                        label="Item Name *"
-                        value={item.itemName}
-                        onChange={(v) => updateFormItem(item.id, 'itemName', v)}
-                        placeholder="Product Name"
-                        disabled={isSaving}
-                      />
-                      <InputField
-                        label="Item Code"
+                        label="รหัสรายการ (Item Code)"
                         value={item.itemCode}
                         onChange={(v) => updateFormItem(item.id, 'itemCode', v)}
                         placeholder="e.g. MO-01"
@@ -646,31 +886,70 @@ export default function App() {
                           <label className="text-[10px] font-bold text-muted uppercase tracking-[0.1em] ml-1">
                             สาเหตุที่พบ *
                           </label>
-                          <select
-                            value={item.reason}
-                            onChange={(e) => updateFormItem(item.id, 'reason', e.target.value)}
-                            className="w-full px-4 py-3 bg-slate-50 border border-border rounded-xl focus:outline-none focus:border-accent text-sm disabled:opacity-50"
-                            disabled={isSaving}
-                          >
-                            <option>รั่ว/ซึม</option>
-                            <option>ซีลฟอยล์ไม่ติด</option>
-                            <option>เปื้อน/คราบ</option>
-                            <option>อื่นๆ</option>
-                          </select>
+                          <div className="space-y-2">
+                            <select
+                              value={item.reason}
+                              onChange={(e) => updateReasonAndResponsible(item.id, e.target.value)}
+                              className="w-full px-4 py-3 bg-slate-50 border border-border rounded-xl focus:outline-none focus:border-accent text-sm disabled:opacity-50"
+                              disabled={isSaving}
+                            >
+                              {getReasonDropdownOptions(item).map((option) => (
+                                <option key={option} value={option}>{option}</option>
+                              ))}
+                            </select>
+                            {item.reason === 'รั่ว' && item.reasonSubtype && (
+                              <div className="px-3 py-2 bg-accent/10 border border-accent rounded-lg">
+                                <p className="text-[10px] text-muted font-semibold mb-1">เลือก: </p>
+                                <p className="text-sm font-semibold text-accent">{item.reasonSubtype}</p>
+                              </div>
+                            )}
+                            {item.reason === 'รั่ว' && !item.reasonSubtype && (
+                              <p className="text-[10px] text-amber-600 font-medium">⚠ เลือกรูปแบบการรั่วเพื่อให้ระบบช่วยแนะนำ</p>
+                            )}
+                          </div>
                         </div>
                         <div className="space-y-2">
                           <label className="text-[10px] font-bold text-muted uppercase tracking-[0.1em] ml-1">
                             ผู้รับผิดชอบ *
                           </label>
-                          <select
-                            value={item.responsible}
-                            onChange={(e) => updateFormItem(item.id, 'responsible', e.target.value)}
-                            className="w-full px-4 py-3 bg-slate-50 border border-border rounded-xl focus:outline-none focus:border-accent text-sm disabled:opacity-50"
-                            disabled={isSaving}
-                          >
-                            <option>SFC</option>
-                            <option>Supplier</option>
-                          </select>
+                          <div className="space-y-2">
+                            <div className="flex gap-2">
+                              <select
+                                value={item.responsible}
+                                onChange={(e) => updateFormItem(item.id, 'responsible', e.target.value)}
+                                className="flex-1 px-4 py-3 bg-slate-50 border border-border rounded-xl focus:outline-none focus:border-accent text-sm disabled:opacity-50"
+                                disabled={isSaving}
+                              >
+                                {getResponsibleDropdownOptions(item).map(option => (
+                                  <option key={option} value={option}>{option}</option>
+                                ))}
+                              </select>
+                              {(item.responsible === 'SFC' || item.responsible === 'Supplier') && (
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setSelectionModal({
+                                      itemId: item.id,
+                                      type: 'responsible',
+                                      title: `เลือกระดับผู้รับผิดชอบ (${item.responsible})`,
+                                      options: RESPONSIBLE_SUBDIVISIONS[item.responsible as 'SFC' | 'Supplier'],
+                                    });
+                                  }}
+                                  className="px-4 py-3 bg-accent/10 text-accent border border-accent rounded-xl text-sm font-semibold hover:bg-accent/20 transition-all disabled:opacity-50"
+                                  disabled={isSaving}
+                                  title="เลือก subdivision"
+                                >
+                                  เลือก
+                                </button>
+                              )}
+                            </div>
+                            {(item.responsible === 'SFC' || item.responsible === 'Supplier') && item.responsibleSubtype && (
+                              <div className="px-3 py-2 bg-accent/10 border border-accent rounded-lg">
+                                <p className="text-[10px] text-muted font-semibold mb-1">เลือก: </p>
+                                <p className="text-sm font-semibold text-accent">{item.responsibleSubtype}</p>
+                              </div>
+                            )}
+                          </div>
                         </div>
                       </div>
 
@@ -749,7 +1028,7 @@ export default function App() {
                   })}
                 </p>
                 <h1 className="text-3xl font-medium tracking-tight text-foreground">
-                  Dashboard &amp; Analytics
+                  แดชบอร์ด &amp; สถิติ
                 </h1>
               </header>
 
@@ -760,6 +1039,49 @@ export default function App() {
       </main>
 
  {/* ===== UPDATE MODAL ===== */}
+      <AnimatePresence>
+        {selectionModal && (
+          <motion.div
+            className="fixed inset-0 z-50 bg-black/40 backdrop-blur-sm flex items-center justify-center p-4"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+          >
+            <motion.div
+              className="w-full max-w-xl bg-white rounded-3xl p-6 shadow-2xl border border-border"
+              initial={{ y: 20, opacity: 0 }}
+              animate={{ y: 0, opacity: 1 }}
+              exit={{ y: 20, opacity: 0 }}
+            >
+              <div className="flex items-center justify-between mb-4">
+                <div>
+                  <p className="text-[11px] text-muted uppercase tracking-[0.18em] mb-1">เลือกคำตอบ</p>
+                  <h2 className="text-xl font-semibold text-foreground">{selectionModal.title}</h2>
+                </div>
+                <button
+                  onClick={() => setSelectionModal(null)}
+                  className="text-sm text-muted hover:text-foreground"
+                >
+                  ปิด
+                </button>
+              </div>
+              <div className="grid gap-3">
+                {selectionModal.options.map(option => (
+                  <button
+                    key={option}
+                    type="button"
+                    onClick={() => handleSelectionModalChoose(option)}
+                    className="w-full rounded-2xl border border-border bg-slate-50 px-4 py-4 text-left text-sm font-semibold text-foreground hover:bg-slate-100 transition"
+                  >
+                    {option}
+                  </button>
+                ))}
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
       <UpdateModal
         isOpen={isModalOpen}
         caseData={selectedCase}
@@ -835,13 +1157,19 @@ function StatusPill({ status }: StatusPillProps) {
     Completed: 'bg-[#f0fdf4] text-emerald-700 border-emerald-200',
   };
 
+  const thaiLabels: Record<string, string> = {
+    Pending: 'รอดำเนินการ',
+    'In-Progress': 'กำลังดำเนินการ',
+    Completed: 'เสร็จสิ้น',
+  };
+
   return (
     <span
       className={`px-3 py-1 rounded-full text-[9px] font-bold uppercase tracking-widest border ${
         styles[status] || styles['Pending']
       }`}
     >
-      {status}
+      {thaiLabels[status] || status}
     </span>
   );
 }

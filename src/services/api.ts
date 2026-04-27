@@ -35,7 +35,9 @@ export interface ReworkItem {
   itemCode: string;
   amount: number;
   reason: string;
+  reasonSubtype?: string;
   responsible: string;
+  responsibleSubtype?: string;
   details?: string;
   imageUrls?: string[];
   status?: 'Pending' | 'In-Progress' | 'Completed';
@@ -101,7 +103,9 @@ export async function insertCase(
         itemCode: item.itemCode,
         amount: item.amount,
         reason: item.reason,
+        reasonSubtype: item.reasonSubtype || '',
         responsible: item.responsible,
+        responsibleSubtype: item.responsibleSubtype || '',
         details: item.details || '',
         images: base64Images // ส่งเป็น Array ของ string (base64)
       };
@@ -174,5 +178,17 @@ export async function fetchDashboardStats(): Promise<ApiResponse> {
     return { success: result.success, data: result.data };
   } catch (error) {
     return { success: false };
+  }
+}
+
+/**
+ * 5. Fetch item master data
+ */
+export async function fetchItemMaster(): Promise<ApiResponse<{itemNumber: string, itemName: string}[]>> {
+  try {
+    const result = await postToGas<{itemNumber: string, itemName: string}[]>({ action: 'getItemMaster' });
+    return { success: result.success, data: result.data || [], error: result.error };
+  } catch (error) {
+    return { success: false, data: [], error: 'Failed to fetch item master' };
   }
 }

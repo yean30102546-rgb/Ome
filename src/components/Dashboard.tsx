@@ -101,38 +101,38 @@ export function Dashboard({ cases, isLoading }: DashboardProps) {
       <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
         {/* Total Cases */}
         <MetricCard
-          label="Total Cases"
+          label="งานทั้งหมด (Total)"
           value={stats.total.toString()}
           icon={<Package size={24} className="text-blue-500" />}
           bgColor="bg-blue-50"
-          trend={`${cases.length} recorded`}
+          trend={`บันทึกแล้ว ${cases.length}`}
         />
 
         {/* Pending Cases */}
         <MetricCard
-          label="Pending"
+          label="รอดำเนินการ (Pending)"
           value={stats.pending.toString()}
           icon={<AlertCircle size={24} className="text-amber-500" />}
           bgColor="bg-amber-50"
-          trend={`${Math.round((stats.pending / stats.total) * 100)}% of total`}
+          trend={`${Math.round((stats.pending / Math.max(stats.total, 1)) * 100)}% ของทั้งหมด`}
         />
 
         {/* In-Progress Cases */}
         <MetricCard
-          label="In-Progress"
+          label="กำลังดำเนินการ (In-Progress)"
           value={stats.inProgress.toString()}
           icon={<Clock size={24} className="text-orange-500" />}
           bgColor="bg-orange-50"
-          trend="Currently processing"
+          trend="กำลังจัดการอยู่"
         />
 
         {/* Completion Rate */}
         <MetricCard
-          label="Completion Rate"
+          label="อัตราการเสร็จสิ้น (Completion Rate)"
           value={`${stats.completionRate}%`}
           icon={<CheckCircle2 size={24} className="text-emerald-500" />}
           bgColor="bg-emerald-50"
-          trend={`${stats.completed} completed`}
+          trend={`เสร็จแล้ว ${stats.completed} รายการ`}
         />
       </div>
 
@@ -141,7 +141,7 @@ export function Dashboard({ cases, isLoading }: DashboardProps) {
         {/* Most Frequent Defect Reasons */}
         <div className="bg-white rounded-2xl p-8 border border-border">
           <div className="flex items-center justify-between mb-6">
-            <h3 className="text-lg font-semibold text-foreground">Most Frequent Defect Reasons</h3>
+            <h3 className="text-lg font-semibold text-foreground">สาเหตุข้อบกพร่องบ่อยที่สุด (Most Frequent Defect Reasons)</h3>
             <TrendingDown size={20} className="text-amber-500" />
           </div>
 
@@ -173,14 +173,14 @@ export function Dashboard({ cases, isLoading }: DashboardProps) {
                 ))}
             </div>
           ) : (
-            <p className="text-sm text-muted text-center py-8">No data available</p>
+            <p className="text-sm text-muted text-center py-8">ไม่มีข้อมูล (No data available)</p>
           )}
         </div>
 
         {/* Workload by Source */}
         <div className="bg-white rounded-2xl p-8 border border-border">
           <div className="flex items-center justify-between mb-6">
-            <h3 className="text-lg font-semibold text-foreground">Workload by Source</h3>
+            <h3 className="text-lg font-semibold text-foreground">ปริมาณงานตามแหล่ง (Workload by Source)</h3>
             <TrendingUp size={20} className="text-blue-500" />
           </div>
 
@@ -191,7 +191,6 @@ export function Dashboard({ cases, isLoading }: DashboardProps) {
                 .map(([source, count]) => {
                   const total = stats.total;
                   const percentage = Math.round((count / total) * 100);
-
                   return (
                     <div key={source} className="flex items-center justify-between">
                       <div className="flex-1">
@@ -212,19 +211,19 @@ export function Dashboard({ cases, isLoading }: DashboardProps) {
                 })}
             </div>
           ) : (
-            <p className="text-sm text-muted text-center py-8">No data available</p>
+            <p className="text-sm text-muted text-center py-8">ไม่มีข้อมูล (No data available)</p>
           )}
         </div>
       </div>
 
       {/* Status Distribution */}
       <div className="bg-white rounded-2xl p-8 border border-border">
-        <h3 className="text-lg font-semibold text-foreground mb-6">Status Distribution</h3>
+        <h3 className="text-lg font-semibold text-foreground mb-6">สถานะงาน (Status Distribution)</h3>
         <div className="grid grid-cols-3 gap-6">
           {[
-            { label: 'Pending', count: stats.pending, color: 'amber' },
-            { label: 'In-Progress', count: stats.inProgress, color: 'orange' },
-            { label: 'Completed', count: stats.completed, color: 'emerald' },
+            { label: 'รอดำเนินการ (Pending)', count: stats.pending, color: 'amber' },
+            { label: 'กำลังดำเนินการ (In-Progress)', count: stats.inProgress, color: 'orange' },
+            { label: 'เสร็จสิ้น (Completed)', count: stats.completed, color: 'emerald' },
           ].map(({ label, count, color }) => {
             const percentage =
               stats.total > 0 ? Math.round((count / stats.total) * 100) : 0;
