@@ -1,0 +1,58 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Sarabun:wght@300;400;500;600;700&display=swap');
+@import "tailwindcss";
+
+@theme {
+  --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Inter", "Sarabun", sans-serif;
+  --font-thai: "Sarabun", sans-serif;
+  
+  --color-bg: #fdfdfd;
+  --color-surface: #ffffff;
+  --color-foreground: #111111;
+  --color-muted: #71717a;
+  --color-border: #e4e4e7;
+  --color-accent: #18181b;
+  
+  /* Map existing primary aliases to the new accent color */
+  --color-primary: var(--color-accent);
+  --color-primary-dark: #000000;
+}
+
+@layer base {
+  body {
+    @apply bg-bg text-foreground font-sans antialiased;
+  }
+}
+
+.glass-card {
+  @apply bg-surface border border-border rounded-xl shadow-[0_1px_3px_0_rgba(0,0,0,0.02)];
+}
+
+.sidebar-item {
+  @apply flex items-center gap-3 px-3 py-2 rounded-lg transition-all duration-200 cursor-pointer text-muted font-medium;
+}
+
+.sidebar-item.active {
+  @apply bg-[#f4f4f5] text-foreground;
+}
+
+.sidebar-item:not(.active):hover {
+  @apply bg-slate-50 text-foreground;
+}
+
+/* Row style for lists */
+.list-row {
+  @apply flex items-center py-4 border-b border-[#f1f1f1] last:border-none;
+}
+
+/* Custom scrollbar */
+::-webkit-scrollbar {
+  width: 5px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  @apply bg-slate-200 rounded-full hover:bg-slate-300;
+}
